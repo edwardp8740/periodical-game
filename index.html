@@ -156,7 +156,7 @@
       const quizQuestion = document.getElementById("quizQuestion");
       const quizChoices = document.getElementById("quizChoices");
       const quizFeedback = document.getElementById("quizFeedback");
-      const DEPLOYED_API_BASE = "https://periodical-game.onrender.com";
+
       
 
       if (!window.kaboom) {
@@ -169,7 +169,7 @@
       // 2. For GitHub Pages, paste your Render API URL here after deployment.
       //    Example: "https://ap-chem-quest-api.onrender.com"
       // 3. You can also test a hosted page by adding ?api=https://your-service.onrender.com
-      const DEPLOYED_API_BASE = "";
+      const DEPLOYED_API_BASE = "https://periodical-game.onrender.com";
 
       function cleanApiBase(value) {
         return String(value || "").trim().replace(/\/+$/, "");
