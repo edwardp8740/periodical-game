@@ -1,0 +1,1534 @@
+    }
+
+    .quiz-choice:disabled {
+      cursor: default;
+      opacity: 0.75;
+    }
+
+    .quiz-feedback {
+      min-height: 48px;
+      margin: 16px 0 0;
+      color: #dbeafe;
+      line-height: 1.45;
+      font-weight: 650;
+    }
+
+    .quiz-feedback.correct {
+      color: #bbf7d0;
+    }
+
+    .quiz-feedback.wrong {
+      color: #fecaca;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="loading" class="loading">
+    Loading AP Chem Quest...
+  </div>
+
+  <div id="quizOverlay" class="quiz-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="quizQuestion">
+    <section class="quiz-card">
+      <p id="quizLabel" class="quiz-label">AP Chemistry Gate</p>
+      <h1 id="quizQuestion" class="quiz-question"></h1>
+      <div id="quizChoices" class="quiz-choices"></div>
+      <p id="quizFeedback" class="quiz-feedback"></p>
+    </section>
+  </div>
+
+  <!-- Kaboom powers the 2D platformer. The Node server supplies the API. -->
+  <script src="https://unpkg.com/kaboom@3000.1.17/dist/kaboom.js"></script>
+  <script>
+    (() => {
+      "use strict";
+
+      const loading = document.getElementById("loading");
+      const quizOverlay = document.getElementById("quizOverlay");
+      const quizLabel = document.getElementById("quizLabel");
+      const quizQuestion = document.getElementById("quizQuestion");
+      const quizChoices = document.getElementById("quizChoices");
+      const quizFeedback = document.getElementById("quizFeedback");
+      
+
+      if (!window.kaboom) {
+        loading.textContent = "Kaboom did not load. Start the Node server and make sure the browser can reach the Kaboom CDN.";
+        return;
+      }
+
+      // Deployment setting:
+      // 1. For local Node testing, leave this empty and use http://localhost:3000.
+      // 2. For GitHub Pages, paste your Render API URL here after deployment.
+      //    Example: "https://ap-chem-quest-api.onrender.com"
+      // 3. You can also test a hosted page by adding ?api=https://your-service.onrender.com
+      const DEPLOYED_API_BASE = "";
+
+      function cleanApiBase(value) {
+        return String(value || "").trim().replace(/\/+$/, "");
+      }
+
+      function getApiBase() {
+        const queryApi = cleanApiBase(new URLSearchParams(window.location.search).get("api"));
+
+        if (queryApi) {
+          localStorage.setItem("apChemQuestApiBase", queryApi);
+          return queryApi;
+        }
+
+        const savedApi = cleanApiBase(localStorage.getItem("apChemQuestApiBase"));
+        const deployedApi = cleanApiBase(DEPLOYED_API_BASE);
+
+        if (deployedApi) {
+          return deployedApi;
+        }
+
+        if (savedApi) {
+          return savedApi;
+        }
+
+        // If the file is opened directly, API calls still try the local Node server.
+        if (window.location.protocol === "file:") {
+          return "http://localhost:3000";
+        }
+
+        // When served by the Node server, same-origin /api routes work.
+        // On GitHub Pages, set DEPLOYED_API_BASE above or use the ?api= URL helper.
+        return "";
+      }
+
+      const API_BASE = getApiBase();
+      const SAVE_KEY = "apChemQuestSave";
+
+      // A local fallback keeps the game playable if the API is temporarily unavailable.
+      const FALLBACK_QUESTIONS = [
+        {
+          id: "l1-q1",
+          levelId: 1,
+          prompt: "Which particle has a negative charge and is found outside the nucleus?",
+          choices: ["Proton", "Neutron", "Electron", "Alpha particle"],
+          answerIndex: 2,
+          explanation: "Electrons are negatively charged and occupy orbitals outside the nucleus.",
+        },
+        {
+          id: "l1-q2",
+          levelId: 1,
+          prompt: "A neutral atom has 17 protons. How many electrons does it have?",
+          choices: ["7", "17", "18", "34"],
+          answerIndex: 1,
+          explanation: "Neutral atoms have the same number of protons and electrons.",
+        },
+        {
+          id: "l1-q3",
+          levelId: 1,
+          prompt: "What does the atomic number of an element represent?",
+          choices: ["Mass number", "Number of protons", "Number of neutrons", "Average atomic mass"],
+          answerIndex: 1,
+          explanation: "Atomic number is defined by the number of protons in the nucleus.",
+        },
+        {
+          id: "l2-q1",
+          levelId: 2,
+          prompt: "How many moles are in 44.0 g of CO2? Molar mass of CO2 is 44.0 g/mol.",
+          choices: ["0.500 mol", "1.00 mol", "2.00 mol", "44.0 mol"],
+          answerIndex: 1,
+          explanation: "Moles = mass divided by molar mass, so 44.0 g / 44.0 g/mol = 1.00 mol.",
+        },
+        {
+          id: "l2-q2",
+          levelId: 2,
+          prompt: "In 2H2 + O2 -> 2H2O, what mole ratio converts H2 to H2O?",
+          choices: ["1 mol H2O / 2 mol H2", "2 mol H2O / 2 mol H2", "2 mol H2 / 1 mol H2O", "1 mol O2 / 2 mol H2O"],
+          answerIndex: 1,
+          explanation: "The coefficients show 2 mol H2 forms 2 mol H2O, a 1:1 ratio.",
+        },
+        {
+          id: "l2-q3",
+          levelId: 2,
+          prompt: "What is the limiting reactant?",
+          choices: [
+            "The reactant with the largest molar mass",
+            "The reactant that is completely consumed first",
+            "The product formed in the smallest mass",
+            "The catalyst in the reaction",
+          ],
+          answerIndex: 1,
+          explanation: "The limiting reactant runs out first and limits the amount of product formed.",
+        },
+        {
+          id: "l3-q1",
+          levelId: 3,
+          prompt: "A reaction releases heat to its surroundings. What type of reaction is it?",
+          choices: ["Endothermic", "Exothermic", "Isothermal", "Electrolytic"],
+          answerIndex: 1,
+          explanation: "Exothermic reactions release heat, so their enthalpy change is negative.",
+        },
+        {
+          id: "l3-q2",
+          levelId: 3,
+          prompt: "If q = mc delta T, which unit is usually used for specific heat capacity in AP Chemistry?",
+          choices: ["J/(g*C)", "mol/L", "atm/L", "g/mol"],
+          answerIndex: 0,
+          explanation: "Specific heat capacity is commonly measured as joules per gram degree Celsius.",
+        },
+        {
+          id: "l3-q3",
+          levelId: 3,
+          prompt: "When a system absorbs heat at constant pressure, what is usually positive?",
+          choices: ["Delta H", "Ksp", "pH", "Oxidation number"],
+          answerIndex: 0,
+          explanation: "Heat absorbed at constant pressure corresponds to a positive enthalpy change.",
+        },
+        {
+          id: "l4-q1",
+          levelId: 4,
+          prompt: "For N2O4(g) <=> 2NO2(g), what happens if pressure is increased?",
+          choices: ["Shifts toward NO2", "Shifts toward N2O4", "K changes immediately", "The reaction stops"],
+          answerIndex: 1,
+          explanation: "Higher pressure favors the side with fewer gas moles, which is N2O4.",
+        },
+        {
+          id: "l4-q2",
+          levelId: 4,
+          prompt: "What does a large equilibrium constant K mean?",
+          choices: ["Reactants are favored", "Products are favored", "The reaction is impossible", "Temperature is zero"],
+          answerIndex: 1,
+          explanation: "A large K means the product concentration terms dominate at equilibrium.",
+        },
+        {
+          id: "l4-q3",
+          levelId: 4,
+          prompt: "Which change always changes the value of K for a reaction?",
+          choices: ["Adding a catalyst", "Changing temperature", "Adding inert gas", "Changing container size"],
+          answerIndex: 1,
+          explanation: "Only temperature changes the equilibrium constant for a given reaction.",
+        },
+        {
+          id: "l5-q1",
+          levelId: 5,
+          prompt: "What does a catalyst do to a reaction?",
+          choices: ["Raises activation energy", "Lowers activation energy", "Changes Delta G", "Gets consumed as a reactant"],
+          answerIndex: 1,
+          explanation: "A catalyst provides an alternate pathway with lower activation energy.",
+        },
+        {
+          id: "l5-q2",
+          levelId: 5,
+          prompt: "For a first-order reaction, what stays constant as concentration changes?",
+          choices: ["Half-life", "Pressure", "Mass", "pH"],
+          answerIndex: 0,
+          explanation: "First-order reactions have a constant half-life independent of concentration.",
+        },
+        {
+          id: "l5-q3",
+          levelId: 5,
+          prompt: "What is the rate law for an elementary step A + B -> products?",
+          choices: ["rate = k[A][B]", "rate = k[A]^2", "rate = k[B]^2", "rate = k/[A][B]"],
+          answerIndex: 0,
+          explanation: "For an elementary step, the rate law follows the molecularity of the step.",
+        },
+      ];
+
+      // Level layout data. Each level has coins, hazards, a required objective, and one required quiz gate.
+      const LEVELS = [
+        {
+          id: 1,
+          name: "Atomic Training",
+          topic: "Atoms and electrons",
+          objectiveText: "Safety beaker",
+          objectiveSprite: "beaker",
+          worldWidth: 2400,
+          background: [12, 27, 48],
+          accent: [125, 211, 252],
+          start: [90, 410],
+          platforms: [
+            { x: 0, y: 500, w: 520, h: 60 },
+            { x: 650, y: 460, w: 240, h: 36 },
+            { x: 1010, y: 420, w: 260, h: 36 },
+            { x: 1410, y: 470, w: 380, h: 36 },
+            { x: 1900, y: 500, w: 500, h: 60 },
+          ],
+          coins: [
+            [210, 430], [290, 430], [720, 395], [805, 395], [1090, 355],
+            [1175, 355], [1500, 405], [1605, 405], [2060, 430], [2160, 430],
+          ],
+          hazards: [
+            { x: 530, y: 520, w: 110, h: 34 },
+            { x: 1285, y: 520, w: 110, h: 34 },
+            { x: 1785, y: 520, w: 105, h: 34 },
+          ],
+          movers: [
+            { x: 1345, y: 385, w: 34, h: 34, axis: "y", range: 80, speed: 2.3 },
+          ],
+          traps: [
+            { type: "drop", x: 840, y: 370, w: 45, h: 120, dropX: 890, dropY: 80, message: "Surprise acid drop. Watch the ceiling." },
+          ],
+          quizGate: { x: 930, y: 330, w: 44, h: 170 },
+          objective: { x: 1690, y: 405 },
+          exit: { x: 2260, y: 395 },
+        },
+        {
+          id: 2,
+          name: "Stoichiometry Sewers",
+          topic: "Moles and limiting reactants",
+          objectiveText: "Balanced equation",
+          objectiveSprite: "balance",
+          worldWidth: 2850,
+          background: [15, 37, 40],
+          accent: [52, 211, 153],
+          start: [90, 410],
+          platforms: [
+            { x: 0, y: 500, w: 430, h: 60 },
+            { x: 560, y: 450, w: 230, h: 34 },
+            { x: 910, y: 395, w: 180, h: 34, type: "falling" },
+            { x: 1210, y: 455, w: 280, h: 34 },
+            { x: 1590, y: 405, w: 210, h: 34, type: "fake" },
+            { x: 1900, y: 470, w: 310, h: 34 },
+            { x: 2350, y: 500, w: 500, h: 60 },
+          ],
+          coins: [
+            [190, 430], [270, 430], [630, 385], [720, 385], [970, 330],
+            [1290, 390], [1380, 390], [1660, 340], [2000, 405], [2100, 405],
+            [2490, 430], [2590, 430],
+          ],
+          hazards: [
+            { x: 435, y: 520, w: 120, h: 34 },
+            { x: 800, y: 520, w: 105, h: 34 },
+            { x: 1095, y: 520, w: 110, h: 34 },
+            { x: 2215, y: 520, w: 120, h: 34 },
+          ],
+          movers: [
+            { x: 1515, y: 365, w: 36, h: 36, axis: "x", range: 130, speed: 2.1 },
+            { x: 2245, y: 380, w: 36, h: 36, axis: "y", range: 90, speed: 2.7 },
+          ],
+          traps: [
+            { type: "pop", x: 1820, y: 360, w: 44, h: 140, popX: 1835, popY: 414, popW: 70, popH: 86, message: "The sewer valve was not friendly." },
+          ],
+          quizGate: { x: 1135, y: 285, w: 44, h: 215 },
+          objective: { x: 2020, y: 405 },
+          exit: { x: 2700, y: 395 },
+        },
+        {
+          id: 3,
+          name: "Thermochemistry Tower",
+          topic: "Heat and enthalpy",
+          objectiveText: "Calorimeter core",
+          objectiveSprite: "calorimeter",
+          worldWidth: 2600,
+          background: [35, 21, 37],
+          accent: [251, 146, 60],
+          start: [80, 430],
+          platforms: [
+            { x: 0, y: 500, w: 450, h: 60 },
+            { x: 550, y: 430, w: 220, h: 34 },
+            { x: 870, y: 360, w: 210, h: 34 },
+            { x: 1170, y: 295, w: 220, h: 34 },
+            { x: 1510, y: 370, w: 250, h: 34 },
+            { x: 1880, y: 450, w: 260, h: 34, type: "falling" },
+            { x: 2260, y: 500, w: 340, h: 60 },
+          ],
+          coins: [
+            [220, 430], [300, 430], [610, 365], [700, 365], [930, 295],
+            [1020, 295], [1235, 230], [1325, 230], [1580, 305], [1690, 305],
+            [1960, 385], [2370, 430],
+          ],
+          hazards: [
+            { x: 455, y: 520, w: 90, h: 34 },
+            { x: 780, y: 520, w: 80, h: 34 },
+            { x: 1400, y: 520, w: 100, h: 34 },
+            { x: 2160, y: 520, w: 90, h: 34 },
+          ],
+          movers: [
+            { x: 1110, y: 260, w: 34, h: 34, axis: "x", range: 120, speed: 2.5 },
+            { x: 1800, y: 335, w: 34, h: 34, axis: "y", range: 115, speed: 3.1 },
+          ],
+          traps: [
+            { type: "drop", x: 1450, y: 260, w: 50, h: 140, dropX: 1470, dropY: 35, message: "Heat rises. Acid falls." },
+          ],
+          quizGate: { x: 1425, y: 215, w: 44, h: 155 },
+          objective: { x: 1625, y: 305 },
+          exit: { x: 2460, y: 395 },
+        },
+        {
+          id: 4,
+          name: "Equilibrium Labyrinth",
+          topic: "Le Chatelier and K",
+          objectiveText: "Equilibrium lever",
+          objectiveSprite: "lever",
+          worldWidth: 3100,
+          background: [20, 28, 55],
+          accent: [196, 181, 253],
+          start: [90, 410],
+          platforms: [
+            { x: 0, y: 500, w: 430, h: 60 },
+            { x: 560, y: 455, w: 240, h: 34 },
+            { x: 940, y: 405, w: 250, h: 34 },
+            { x: 1320, y: 455, w: 220, h: 34, type: "fake" },
+            { x: 1640, y: 390, w: 230, h: 34, id: "slide-bridge" },
+            { x: 2025, y: 455, w: 230, h: 34 },
+            { x: 2350, y: 400, w: 180, h: 34, type: "falling" },
+            { x: 2700, y: 500, w: 400, h: 60 },
+          ],
+          coins: [
+            [205, 430], [285, 430], [640, 390], [730, 390], [1010, 340],
+            [1110, 340], [1390, 390], [1710, 325], [1810, 325], [2110, 390],
+            [2425, 335], [2810, 430], [2910, 430],
+          ],
+          hazards: [
+            { x: 435, y: 520, w: 120, h: 34 },
+            { x: 810, y: 520, w: 120, h: 34 },
+            { x: 1200, y: 520, w: 110, h: 34 },
+            { x: 1885, y: 520, w: 130, h: 34 },
+            { x: 2545, y: 520, w: 145, h: 34 },
+          ],
+          movers: [
+            { x: 1980, y: 360, w: 34, h: 34, axis: "x", range: 150, speed: 2.6 },
+            { x: 2600, y: 360, w: 34, h: 34, axis: "y", range: 120, speed: 3.2 },
+          ],
+          traps: [
+            { type: "slide", x: 1590, y: 260, w: 55, h: 160, targetId: "slide-bridge", dx: 145, message: "Equilibrium shifted the platform." },
+            { type: "pop", x: 2280, y: 310, w: 60, h: 160, popX: 2260, popY: 420, popW: 80, popH: 80, message: "The product side bit back." },
+          ],
+          quizGate: { x: 1260, y: 315, w: 44, h: 185 },
+          objective: { x: 2120, y: 390 },
+          exit: { x: 2960, y: 395 },
+        },
+        {
+          id: 5,
+          name: "Kinetics Gauntlet",
+          topic: "Rates and catalysts",
+          objectiveText: "Catalyst crystal",
+          objectiveSprite: "catalyst",
+          worldWidth: 3400,
+          background: [38, 25, 20],
+          accent: [250, 204, 21],
+          start: [90, 410],
+          platforms: [
+            { x: 0, y: 500, w: 360, h: 60 },
+            { x: 505, y: 455, w: 190, h: 34, type: "falling" },
+            { x: 820, y: 400, w: 220, h: 34 },
+            { x: 1160, y: 345, w: 180, h: 34, type: "fake" },
+            { x: 1480, y: 430, w: 260, h: 34 },
+            { x: 1870, y: 380, w: 210, h: 34 },
+            { x: 2220, y: 455, w: 230, h: 34 },
+            { x: 2600, y: 405, w: 190, h: 34, type: "falling" },
+            { x: 3030, y: 500, w: 370, h: 60 },
+          ],
+          coins: [
+            [180, 430], [260, 430], [565, 390], [890, 335], [990, 335],
+            [1225, 280], [1560, 365], [1660, 365], [1945, 315], [2295, 390],
+            [2375, 390], [2660, 340], [3135, 430], [3235, 430],
+          ],
+          hazards: [
+            { x: 370, y: 520, w: 125, h: 34 },
+            { x: 705, y: 520, w: 105, h: 34 },
+            { x: 1045, y: 520, w: 105, h: 34 },
+            { x: 1360, y: 520, w: 110, h: 34 },
+            { x: 1760, y: 520, w: 100, h: 34 },
+            { x: 2470, y: 520, w: 120, h: 34 },
+            { x: 2810, y: 520, w: 210, h: 34 },
+          ],
+          movers: [
+            { x: 720, y: 340, w: 36, h: 36, axis: "y", range: 130, speed: 3.5 },
+            { x: 1455, y: 350, w: 36, h: 36, axis: "x", range: 150, speed: 3.3 },
+            { x: 2150, y: 330, w: 36, h: 36, axis: "x", range: 170, speed: 3.8 },
+            { x: 2885, y: 350, w: 36, h: 36, axis: "y", range: 135, speed: 4.0 },
+          ],
+          traps: [
+            { type: "drop", x: 1090, y: 240, w: 55, h: 190, dropX: 1130, dropY: 25, message: "Fast reaction. Faster hazard." },
+            { type: "pop", x: 2520, y: 290, w: 55, h: 180, popX: 2510, popY: 404, popW: 80, popH: 96, message: "Activation energy spike." },
+          ],
+          quizGate: { x: 1815, y: 265, w: 44, h: 235 },
+          objective: { x: 2320, y: 390 },
+          exit: { x: 3260, y: 395 },
+        },
+      ];
+
+      // Start Kaboom after data is ready.
+      kaboom({
+        canvas: document.getElementById("game"),
+        width: 960,
+        height: 540,
+        letterbox: true,
+        background: [7, 17, 31],
+        global: true,
+        touchToMouse: true,
+      });
+
+      loading.classList.add("hidden");
+
+      setGravity(1800);
+
+      // Small SVG sprites keep the project in one file and make the theme visible.
+      function svgUrl(svg) {
+        return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+      }
+
+      loadSprite("chemist", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="80" viewBox="0 0 64 80">
+          <rect x="18" y="28" width="28" height="42" rx="8" fill="#f8fafc" stroke="#0f172a" stroke-width="4"/>
+          <path d="M22 32h20l8 34H14z" fill="#dbeafe" stroke="#0f172a" stroke-width="4"/>
+          <circle cx="32" cy="18" r="14" fill="#facc15" stroke="#0f172a" stroke-width="4"/>
+          <rect x="18" y="18" width="28" height="7" fill="#0f172a"/>
+          <rect x="23" y="42" width="18" height="8" fill="#38bdf8"/>
+          <path d="M15 71h34" stroke="#0f172a" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+      `));
+
+      loadSprite("electron", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+          <circle cx="20" cy="20" r="15" fill="#fde047" stroke="#713f12" stroke-width="4"/>
+          <path d="M13 20h14" stroke="#713f12" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+      `));
+
+      loadSprite("beaker", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="64" viewBox="0 0 56 64">
+          <path d="M16 6h24M20 6v22L9 56h38L36 28V6" fill="#bae6fd" stroke="#082f49" stroke-width="4" stroke-linejoin="round"/>
+          <path d="M16 45h24l4 11H12z" fill="#38bdf8"/>
+        </svg>
+      `));
+
+      loadSprite("balance", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+          <path d="M32 10v42M18 52h28M14 20h36" stroke="#052e16" stroke-width="5" stroke-linecap="round"/>
+          <path d="M14 20l-9 18h18zM50 20l-9 18h18z" fill="#86efac" stroke="#052e16" stroke-width="4"/>
+          <circle cx="32" cy="10" r="6" fill="#bbf7d0" stroke="#052e16" stroke-width="4"/>
+        </svg>
+      `));
+
+      loadSprite("calorimeter", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="58" height="64" viewBox="0 0 58 64">
+          <rect x="12" y="16" width="34" height="40" rx="5" fill="#fed7aa" stroke="#431407" stroke-width="4"/>
+          <rect x="8" y="8" width="42" height="12" rx="3" fill="#fb923c" stroke="#431407" stroke-width="4"/>
+          <path d="M22 28c8 7-6 8 4 16M34 27c8 8-6 9 4 17" stroke="#7c2d12" stroke-width="4" fill="none" stroke-linecap="round"/>
+        </svg>
+      `));
+
+      loadSprite("lever", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+          <rect x="9" y="47" width="46" height="10" fill="#ddd6fe" stroke="#2e1065" stroke-width="4"/>
+          <path d="M31 47L48 12" stroke="#8b5cf6" stroke-width="8" stroke-linecap="round"/>
+          <circle cx="50" cy="10" r="8" fill="#c4b5fd" stroke="#2e1065" stroke-width="4"/>
+        </svg>
+      `));
+
+      loadSprite("catalyst", svgUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+          <path d="M32 5l20 15-8 34H20L12 20z" fill="#fef08a" stroke="#422006" stroke-width="4" stroke-linejoin="round"/>
+          <path d="M32 5v49M12 20h40M20 54l12-34 12 34" stroke="#a16207" stroke-width="3"/>
+        </svg>
+      `));
+
+      function getSave() {
+        try {
+          return JSON.parse(localStorage.getItem(SAVE_KEY)) || { unlocked: 1, bestScore: 0 };
+        } catch (error) {
+          return { unlocked: 1, bestScore: 0 };
+        }
+      }
+
+      function setSave(nextSave) {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(nextSave));
+      }
+
+      function unlockNextLevel(levelId, score) {
+        const save = getSave();
+        save.unlocked = Math.max(save.unlocked, Math.min(LEVELS.length, levelId + 1));
+        save.bestScore = Math.max(save.bestScore || 0, score || 0);
+        setSave(save);
+      }
+
+      function makeCampaign() {
+        return {
+          totalScore: 0,
+          totalCoins: 0,
+          levelsCleared: 0,
+          completed: false,
+        };
+      }
+
+      function pickFallbackQuestion(levelId) {
+        const pool = FALLBACK_QUESTIONS.filter((question) => question.levelId === levelId);
+        return pool[Math.floor(Math.random() * pool.length)];
+      }
+
+      async function fetchQuestion(levelId) {
+        try {
+          const response = await fetch(`${API_BASE}/api/questions?level=${levelId}`);
+
+          if (!response.ok) {
+            throw new Error("Question API returned an error.");
+          }
+
+          const question = await response.json();
+          question.fromApi = true;
+          return question;
+        } catch (error) {
+          const fallback = pickFallbackQuestion(levelId);
+          return { ...fallback, fromApi: false };
+        }
+      }
+
+      async function checkAnswer(question, choiceIndex) {
+        if (!question.fromApi) {
+          const fallback = FALLBACK_QUESTIONS.find((item) => item.id === question.id);
+          return {
+            correct: fallback.answerIndex === choiceIndex,
+            correctIndex: fallback.answerIndex,
+            explanation: fallback.explanation,
+          };
+        }
+
+        try {
+          const response = await fetch(`${API_BASE}/api/answer`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              questionId: question.id,
+              choiceIndex,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Answer API returned an error.");
+          }
+
+          return response.json();
+        } catch (error) {
+          const fallback = FALLBACK_QUESTIONS.find((item) => item.id === question.id);
+          return {
+            correct: fallback.answerIndex === choiceIndex,
+            correctIndex: fallback.answerIndex,
+            explanation: fallback.explanation,
+          };
+        }
+      }
+
+      async function saveScore(campaign) {
+        try {
+          await fetch(`${API_BASE}/api/scores`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              name: "AP Chemist",
+              totalScore: campaign.totalScore,
+              coins: campaign.totalCoins,
+              levelsCleared: campaign.levelsCleared,
+              completed: campaign.completed,
+            }),
+          });
+        } catch (error) {
+          // The local score still remains in localStorage if the API is offline.
+        }
+      }
+
+      async function loadScores() {
+        try {
+          const response = await fetch(`${API_BASE}/api/scores`);
+
+          if (!response.ok) {
+            throw new Error("Score API returned an error.");
+          }
+
+          const data = await response.json();
+          return data.scores || [];
+        } catch (error) {
+          return [];
+        }
+      }
+
+      function pauseForQuiz(isPaused) {
+        try {
+          debug.paused = isPaused;
+        } catch (error) {
+          // Some Kaboom builds may not expose debug.pause control.
+        }
+      }
+
+      function askChemQuestion(levelId) {
+        pauseForQuiz(true);
+
+        return new Promise(async (resolve) => {
+          const question = await fetchQuestion(levelId);
+
+          quizLabel.textContent = question.fromApi ? "AP Chemistry Gate" : "AP Chemistry Gate - offline questions";
+          quizQuestion.textContent = question.prompt;
+          quizFeedback.textContent = "";
+          quizFeedback.className = "quiz-feedback";
+          quizChoices.innerHTML = "";
+
+          question.choices.forEach((choice, index) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "quiz-choice";
+            button.textContent = `${String.fromCharCode(65 + index)}. ${choice}`;
+
+            button.addEventListener("click", async () => {
+              const buttons = [...quizChoices.querySelectorAll("button")];
+              buttons.forEach((item) => {
+                item.disabled = true;
+              });
+
+              const result = await checkAnswer(question, index);
+
+              if (result.correct) {
+                quizFeedback.className = "quiz-feedback correct";
+                quizFeedback.textContent = `Correct. ${result.explanation}`;
+
+                window.setTimeout(() => {
+                  quizOverlay.classList.add("hidden");
+                  pauseForQuiz(false);
+                  resolve({ correct: true, explanation: result.explanation });
+                }, 900);
+
+                return;
+              }
+
+              quizFeedback.className = "quiz-feedback wrong";
+              quizFeedback.textContent = `Not quite. ${result.explanation} Try again to unlock the gate.`;
+
+              window.setTimeout(() => {
+                buttons.forEach((item) => {
+                  item.disabled = false;
+                });
+              }, 800);
+            });
+
+            quizChoices.appendChild(button);
+          });
+
+          quizOverlay.classList.remove("hidden");
+          const firstChoice = quizChoices.querySelector("button");
+
+          if (firstChoice) {
+            firstChoice.focus();
+          }
+        });
+      }
+
+      function addButton(label, y, onPress, options = {}) {
+        const buttonWidth = options.width || 330;
+        const buttonHeight = options.height || 54;
+        const x = options.x || center().x;
+        const fill = options.fill || [23, 37, 63];
+        const stroke = options.stroke || [125, 211, 252];
+        const textColor = options.textColor || [248, 250, 252];
+
+        const box = add([
+          rect(buttonWidth, buttonHeight),
+          pos(x, y),
+          anchor("center"),
+          area(),
+          color(...fill),
+          outline(3, rgb(...stroke)),
+          z(5),
+          { isUiButton: true },
+        ]);
+
+        add([
+          text(label, { size: options.size || 22, width: buttonWidth - 24, align: "center" }),
+          pos(x, y),
+          anchor("center"),
+          color(...textColor),
+          z(6),
+        ]);
+
+        box.onClick(onPress);
+        return box;
+      }
+
+      function addTitle(textValue, subtitle) {
+        add([
+          text(textValue, { size: 56, width: 820, align: "center" }),
+          pos(center().x, 85),
+          anchor("center"),
+          color(248, 250, 252),
+          z(5),
+        ]);
+
+        if (subtitle) {
+          add([
+            text(subtitle, { size: 18, width: 760, align: "center" }),
+            pos(center().x, 142),
+            anchor("center"),
+            color(191, 219, 254),
+            z(5),
+          ]);
+        }
+      }
+
+      function addMenuBackground() {
+        add([
+          rect(width(), height()),
+          pos(0, 0),
+          color(8, 16, 30),
+          z(-20),
+        ]);
+
+        // Decorative lab molecules drift behind menu screens.
+        for (let i = 0; i < 9; i += 1) {
+          const molecule = add([
+            circle(9 + (i % 3) * 5),
+            pos(80 + i * 105, 70 + (i % 4) * 105),
+            color(i % 2 === 0 ? 56 : 251, i % 2 === 0 ? 189 : 146, i % 2 === 0 ? 248 : 60),
+            opacity(0.2),
+            z(-10),
+            { baseY: 70 + (i % 4) * 105, speed: 0.8 + i * 0.12 },
+          ]);
+
+          molecule.onUpdate(() => {
+            molecule.pos.y = molecule.baseY + Math.sin(time() * molecule.speed) * 12;
+          });
+        }
+      }
+
+      scene("menu", () => {
+        addMenuBackground();
+        addTitle("AP Chem Quest", "Collect electrons, survive lab hazards, grab each level objective, and answer AP Chemistry gates.");
+
+        addButton("Start Campaign", 220, () => go("game", 1, makeCampaign()));
+        addButton("Level Select", 290, () => go("levelSelect"));
+        addButton("High Scores", 360, () => go("scores"));
+        addButton("Controls", 430, () => go("controls"));
+
+        add([
+          text("Node API + Kaboom 2D platformer", { size: 16, width: 820, align: "center" }),
+          pos(center().x, 505),
+          anchor("center"),
+          color(148, 163, 184),
+        ]);
+      });
+
+      scene("controls", () => {
+        addMenuBackground();
+        addTitle("Controls", "Move carefully. Some lab platforms behave like a trick level.");
+
+        const lines = [
+          "Move: A/D or Left/Right",
+          "Jump: W, Up, or Space",
+          "Goal: collect coins, grab the level objective, answer the AP Chem gate, then reach the exit.",
+          "Wrong quiz answers do not end the run, but the gate stays locked until you get it right.",
+        ];
+
+        lines.forEach((line, index) => {
+          add([
+            text(line, { size: index === 2 ? 19 : 22, width: 760, align: "center" }),
+            pos(center().x, 230 + index * 48),
+            anchor("center"),
+            color(index === 3 ? 250 : 226, index === 3 ? 204 : 232, index === 3 ? 21 : 240),
+          ]);
+        });
+
+        addButton("Back", 460, () => go("menu"), { width: 250 });
+      });
+
+      scene("levelSelect", () => {
+        addMenuBackground();
+        addTitle("Level Select", "Each level has a chemistry topic, a required objective, and one AP Chem gate.");
+
+        const save = getSave();
+
+        LEVELS.forEach((level, index) => {
+          const locked = level.id > save.unlocked;
+          const x = 190 + (index % 3) * 290;
+          const y = index < 3 ? 245 : 365;
+          const label = locked ? `Locked: ${level.name}` : `${level.id}. ${level.name}`;
+          const fill = locked ? [31, 41, 55] : [18, 51, 76];
+          const stroke = locked ? [75, 85, 99] : level.accent;
+
+          addButton(label, y, () => {
+            if (!locked) {
+              go("game", level.id, makeCampaign());
+            }
+          }, {
+            x,
+            width: 250,
+            height: 68,
+            fill,
+            stroke,
+            size: 18,
+            textColor: locked ? [148, 163, 184] : [248, 250, 252],
+          });
+
+          add([
+            text(level.topic, { size: 13, width: 230, align: "center" }),
+            pos(x, y + 49),
+            anchor("center"),
+            color(203, 213, 225),
+            z(8),
+          ]);
+        });
+
+        addButton("Back", 480, () => go("menu"), { width: 230 });
+      });
+
+      scene("scores", async () => {
+        addMenuBackground();
+        addTitle("High Scores", "Scores are stored by the Node API while the server is running.");
+
+        add([
+          text("Loading scores...", { size: 22, width: 760, align: "center" }),
+          pos(center().x, 230),
+          anchor("center"),
+          color(226, 232, 240),
+          "scoreLoading",
+        ]);
+
+        const rows = await loadScores();
+        destroyAll("scoreLoading");
+
+        if (rows.length === 0) {
+          add([
+            text("No scores yet. Finish a level or campaign to create one.", { size: 22, width: 760, align: "center" }),
+            pos(center().x, 250),
+            anchor("center"),
+            color(226, 232, 240),
+          ]);
+        } else {
+          rows.slice(0, 8).forEach((row, index) => {
+            add([
+              text(`${index + 1}. ${row.name} - ${row.totalScore} pts - ${row.coins} coins - ${row.levelsCleared} levels`, {
+                size: 20,
+                width: 780,
+                align: "center",
+              }),
+              pos(center().x, 205 + index * 36),
+              anchor("center"),
+              color(index === 0 ? 250 : 226, index === 0 ? 204 : 232, index === 0 ? 21 : 240),
+            ]);
+          });
+        }
+
+        addButton("Back", 480, () => go("menu"), { width: 230 });
+      });
+
+      function makeToast(message) {
+        const toast = add([
+          rect(760, 44),
+          pos(center().x, 76),
+          anchor("center"),
+          fixed(),
+          color(15, 23, 42),
+          outline(2, rgb(125, 211, 252)),
+          z(200),
+          "toast",
+        ]);
+
+        add([
+          text(message, { size: 18, width: 730, align: "center" }),
+          pos(center().x, 76),
+          anchor("center"),
+          fixed(),
+          color(248, 250, 252),
+          z(201),
+          "toast",
+        ]);
+
+        wait(2.2, () => {
+          destroyAll("toast");
+        });
+
+        return toast;
+      }
+
+      function makePlatform(data, level, registry) {
+        const platformColor = data.type === "fake" ? [99, 102, 241] : [30, 64, 91];
+        const platform = add([
+          rect(data.w, data.h),
+          pos(data.x, data.y),
+          area(),
+          body({ isStatic: true }),
+          color(...platformColor),
+          outline(2, rgb(...level.accent)),
+          "platform",
+          {
+            id: data.id || "",
+            type: data.type || "normal",
+            falling: false,
+            sliding: false,
+            targetX: data.x,
+          },
+        ]);
+
+        if (data.id) {
+          registry[data.id] = platform;
+        }
+
+        if (data.type === "falling") {
+          platform.tag("fallingPlatform");
+        }
+
+        if (data.type === "fake") {
+          platform.tag("fakePlatform");
+        }
+
+        platform.onUpdate(() => {
+          if (platform.falling) {
+            platform.move(0, 420);
+          }
+
+          if (platform.sliding) {
+            const direction = platform.pos.x < platform.targetX ? 1 : -1;
+            platform.move(direction * 155, 0);
+
+            if (Math.abs(platform.pos.x - platform.targetX) < 6) {
+              platform.pos.x = platform.targetX;
+              platform.sliding = false;
+            }
+          }
+
+          if (platform.pos.y > 760) {
+            destroy(platform);
+          }
+        });
+
+        return platform;
+      }
+
+      function makeAcidPool(data) {
+        const pool = add([
+          rect(data.w, data.h),
+          pos(data.x, data.y),
+          area(),
+          color(34, 197, 94),
+          opacity(0.9),
+          "hazard",
+          { hazardName: "acid pool" },
+        ]);
+
+        add([
+          text("H+", { size: 14 }),
+          pos(data.x + 10, data.y + 7),
+          color(5, 46, 22),
+          z(2),
+        ]);
+
+        return pool;
+      }
+
+      function makeMovingHazard(data) {
+        const hazard = add([
+          rect(data.w, data.h),
+          pos(data.x, data.y),
+          area(),
+          color(248, 113, 113),
+          outline(2, rgb(127, 29, 29)),
+          "hazard",
+          {
+            baseX: data.x,
+            baseY: data.y,
+            axis: data.axis,
+            range: data.range,
+            speed: data.speed,
+            phase: 0,
+            hazardName: "moving acid ion",
+          },
+        ]);
+
+        hazard.onUpdate(() => {
+          hazard.phase += dt() * hazard.speed;
+          const offset = Math.sin(hazard.phase) * hazard.range;
+
+          if (hazard.axis === "x") {
+            hazard.pos.x = hazard.baseX + offset;
+          } else {
+            hazard.pos.y = hazard.baseY + offset;
+          }
+        });
+
+        return hazard;
+      }
+
+      function makeTrap(data, registry) {
+        const trap = add([
+          rect(data.w, data.h),
+          pos(data.x, data.y),
+          area(),
+          opacity(0),
+          "trap",
+          {
+            ...data,
+            triggered: false,
+          },
+        ]);
+
+        trap.registry = registry;
+        return trap;
+      }
+
+      function spawnDrop(data) {
+        const drop = add([
+          rect(46, 46),
+          pos(data.dropX, data.dropY),
+          area(),
+          color(74, 222, 128),
+          outline(2, rgb(20, 83, 45)),
+          "hazard",
+          {
+            hazardName: "falling acid",
+          },
+        ]);
+
+        drop.onUpdate(() => {
+          drop.move(0, 640);
+
+          if (drop.pos.y > 700) {
+            destroy(drop);
+          }
+        });
+      }
+
+      function spawnPopHazard(data) {
+        add([
+          rect(data.popW, data.popH),
+          pos(data.popX, data.popY),
+          area(),
+          color(239, 68, 68),
+          outline(2, rgb(127, 29, 29)),
+          "hazard",
+          {
+            hazardName: "sudden acid wall",
+          },
+        ]);
+      }
+
+      function buildBackground(level) {
+        add([
+          rect(level.worldWidth, height()),
+          pos(0, 0),
+          color(...level.background),
+          z(-100),
+        ]);
+
+        for (let i = 0; i < 18; i += 1) {
+          add([
+            circle(10 + (i % 4) * 4),
+            pos(90 + i * 185, 60 + (i % 5) * 75),
+            color(...level.accent),
+            opacity(0.12),
+            z(-90),
+          ]);
+        }
+      }
+
+      function addLevelLabels(level) {
+        add([
+          text(level.name, { size: 24, width: 500 }),
+          pos(24, 20),
+          fixed(),
+          color(248, 250, 252),
+          z(100),
+        ]);
+
+        add([
+          text(`Topic: ${level.topic}`, { size: 15, width: 440 }),
+          pos(25, 50),
+          fixed(),
+          color(203, 213, 225),
+          z(100),
+        ]);
+      }
+
+      function addObjective(level) {
+        add([
+          sprite(level.objectiveSprite),
+          pos(level.objective.x, level.objective.y),
+          anchor("center"),
+          area(),
+          scale(0.8),
+          "objective",
+        ]);
+
+        add([
+          text(level.objectiveText, { size: 15, width: 150, align: "center" }),
+          pos(level.objective.x, level.objective.y - 52),
+          anchor("center"),
+          color(248, 250, 252),
+          "objectiveLabel",
+        ]);
+      }
+
+      function addExit(level) {
+        add([
+          rect(60, 104),
+          pos(level.exit.x, level.exit.y - 52),
+          area(),
+          color(14, 165, 233),
+          outline(3, rgb(224, 242, 254)),
+          "exit",
+        ]);
+
+        add([
+          text("FINISH", { size: 14, width: 80, align: "center" }),
+          pos(level.exit.x + 30, level.exit.y - 72),
+          anchor("center"),
+          color(248, 250, 252),
+        ]);
+      }
+
+      function addQuizGate(level) {
+        const gate = add([
+          rect(level.quizGate.w, level.quizGate.h),
+          pos(level.quizGate.x, level.quizGate.y),
+          area(),
+          body({ isStatic: true }),
+          color(37, 99, 235),
+          outline(3, rgb(191, 219, 254)),
+          "quizGate",
+        ]);
+
+        add([
+          text("AP\nCHEM\nGATE", { size: 14, width: 70, align: "center" }),
+          pos(level.quizGate.x + level.quizGate.w / 2, level.quizGate.y + level.quizGate.h / 2),
+          anchor("center"),
+          color(239, 246, 255),
+          z(3),
+          "quizGateLabel",
+        ]);
+
+        return gate;
+      }
+
+      function addCoins(level) {
+        level.coins.forEach(([x, y]) => {
+          const coin = add([
+            sprite("electron"),
+            pos(x, y),
+            anchor("center"),
+            area(),
+            scale(0.62),
+            "coin",
+            { baseY: y },
+          ]);
+
+          coin.onUpdate(() => {
+            coin.pos.y = coin.baseY + Math.sin(time() * 3 + x * 0.01) * 5;
+          });
+        });
+      }
+
+      scene("game", (levelId = 1, campaign = makeCampaign()) => {
+        const level = LEVELS.find((item) => item.id === levelId) || LEVELS[0];
+        const registry = {};
+        const state = {
+          levelScore: 0,
+          levelCoins: 0,
+          hasObjective: false,
+          quizAnswered: false,
+          quizOpen: false,
+          dead: false,
+          startTime: time(),
+        };
+
+        setGravity(1800);
+        buildBackground(level);
+        addLevelLabels(level);
+
+        level.platforms.forEach((platform) => makePlatform(platform, level, registry));
+        level.hazards.forEach(makeAcidPool);
+        level.movers.forEach(makeMovingHazard);
+        level.traps.forEach((trap) => makeTrap(trap, registry));
+        addCoins(level);
+        addObjective(level);
+        addExit(level);
+        const quizGate = addQuizGate(level);
+
+        const player = add([
+          sprite("chemist"),
+          pos(level.start[0], level.start[1]),
+          anchor("center"),
+          area({ scale: 0.74 }),
+          body(),
+          scale(0.72),
+          z(10),
+          {
+            speed: 285,
+            jumpPower: 650,
+          },
+        ]);
+
+        const hud = add([
+          text("", { size: 18, width: 530 }),
+          pos(24, 82),
+          fixed(),
+          color(248, 250, 252),
+          z(100),
+        ]);
+
+        const objectiveHud = add([
+          text("", { size: 16, width: 420, align: "right" }),
+          pos(width() - 450, 24),
+          fixed(),
+          color(226, 232, 240),
+          z(100),
+        ]);
+
+        function updateHud() {
+          const seconds = Math.max(0, Math.floor(time() - state.startTime));
+          hud.text = `Coins: ${state.levelCoins}  Score: ${state.levelScore}  Time: ${seconds}s`;
+          objectiveHud.text = `Objective: ${state.hasObjective ? "collected" : level.objectiveText} | Quiz: ${state.quizAnswered ? "passed" : "locked"}`;
+        }
+
+        function lose(reason) {
+          if (state.dead) {
+            return;
+          }
+
+          state.dead = true;
+          go("gameOver", {
+            levelId: level.id,
+            reason,
+            campaign,
+            coins: state.levelCoins,
+            score: state.levelScore,
+          });
+        }
+
+        function completeLevel() {
+          const timeBonus = Math.max(0, 120 - Math.floor(time() - state.startTime)) * 5;
+          const levelBonus = 500 + timeBonus + state.levelScore;
+          campaign.totalScore += levelBonus;
+          campaign.totalCoins += state.levelCoins;
+          campaign.levelsCleared = Math.max(campaign.levelsCleared, level.id);
+
+          unlockNextLevel(level.id, campaign.totalScore);
+          saveScore(campaign);
+
+          if (level.id >= LEVELS.length) {
+            campaign.completed = true;
+            saveScore(campaign);
+            go("won", campaign);
+            return;
+          }
+
+          go("levelComplete", {
+            level,
+            campaign,
+            levelBonus,
+            nextLevelId: level.id + 1,
+          });
+        }
+
+        onKeyDown("left", () => {
+          if (!state.quizOpen) {
+            player.move(-player.speed, 0);
+            player.flipX = true;
+          }
+        });
+
+        onKeyDown("a", () => {
+          if (!state.quizOpen) {
+            player.move(-player.speed, 0);
+            player.flipX = true;
+          }
+        });
+
+        onKeyDown("right", () => {
+          if (!state.quizOpen) {
+            player.move(player.speed, 0);
+            player.flipX = false;
+          }
+        });
+
+        onKeyDown("d", () => {
+          if (!state.quizOpen) {
+            player.move(player.speed, 0);
+            player.flipX = false;
+          }
+        });
+
+        function jump() {
+          if (!state.quizOpen && player.isGrounded()) {
+            player.jump(player.jumpPower);
+          }
+        }
+
+        onKeyPress("space", jump);
+        onKeyPress("up", jump);
+        onKeyPress("w", jump);
+
+        player.onCollide("coin", (coin) => {
+          destroy(coin);
+          state.levelCoins += 1;
+          state.levelScore += 100;
+          updateHud();
+        });
+
+        player.onCollide("objective", (objective) => {
+          destroy(objective);
+          destroyAll("objectiveLabel");
+          state.hasObjective = true;
+          state.levelScore += 350;
+          makeToast(`${level.objectiveText} collected.`);
+          updateHud();
+        });
+
+        player.onCollide("hazard", (hazard) => {
+          if (!state.quizOpen) {
+            lose(`You hit a ${hazard.hazardName || "lab hazard"}.`);
+          }
+        });
+
+        player.onCollide("fallingPlatform", (platform) => {
+          if (!platform.falling) {
+            platform.falling = true;
+            makeToast("This platform is dissolving.");
+          }
+        });
+
+        player.onCollide("fakePlatform", (platform) => {
+          if (!platform.falling) {
+            platform.falling = true;
+            platform.color = rgb(190, 18, 60);
+            makeToast("That platform was not on the lab safety contract.");
+          }
+        });
+
+        player.onCollide("trap", (trap) => {
+          if (trap.triggered) {
+            return;
+          }
+          
+          trap.triggered = true;
+
+          if (trap.message) {
+            makeToast(trap.message);
+          }
+
+          if (trap.type === "drop") {
+            spawnDrop(trap);
+          }
+
+          if (trap.type === "pop") {
+            spawnPopHazard(trap);
+          }
+
+          if (trap.type === "slide" && trap.registry[trap.targetId]) {
+            const target = trap.registry[trap.targetId];
+            target.targetX = target.pos.x + trap.dx;
+            target.sliding = true;
+          }
+        });
+
+        player.onCollide("quizGate", async () => {
+          if (state.quizAnswered || state.quizOpen) {
+            return;
+          }
+
+          state.quizOpen = true;
+          const result = await askChemQuestion(level.id);
+          state.quizOpen = false;
+
+          if (result.correct) {
+            state.quizAnswered = true;
+            state.levelScore += 250;
+            destroy(quizGate);
+            destroyAll("quizGateLabel");
+            makeToast("Gate unlocked. Chemistry handled.");
+            updateHud();
+          }
+        });
+
+        player.onCollide("exit", () => {
+          if (!state.hasObjective) {
+            makeToast(`Grab the ${level.objectiveText} before exiting.`);
+            player.pos.x -= 80;
+            return;
+          }
+
+          if (!state.quizAnswered) {
+            makeToast("Answer the AP Chem gate before exiting.");
+            player.pos.x -= 80;
+            return;
+          }
+
+          completeLevel();
+        });
+
+        onKeyPress("escape", () => {
+          go("menu");
+        });
+
+        player.onUpdate(() => {
+          camPos(
+            Math.max(width() / 2, Math.min(player.pos.x, level.worldWidth - width() / 2)),
+            height() / 2,
+          );
+
+          if (player.pos.y > 720) {
+            lose("You fell below the lab floor.");
+          }
+
+          updateHud();
+        });
+
+        updateHud();
+        makeToast("Collect electrons, grab the objective, and unlock the AP Chem gate.");
+      });
+
+      scene("levelComplete", ({ level, campaign, levelBonus, nextLevelId }) => {
+        addMenuBackground();
+        addTitle("Level Complete", `${level.name} cleared. Your lab notebook is getting stronger.`);
+
+        add([
+          text(`Level bonus: ${levelBonus} points\nTotal score: ${campaign.totalScore}\nTotal coins: ${campaign.totalCoins}`, {
+            size: 24,
+            width: 720,
+            align: "center",
+          }),
+          pos(center().x, 230),
+          anchor("center"),
+          color(248, 250, 252),
+        ]);
+
+        addButton("Next Level", 350, () => go("game", nextLevelId, campaign));
+        addButton("Level Select", 420, () => go("levelSelect"));
+        addButton("Menu", 490, () => go("menu"), { width: 230 });
+      });
+
+      scene("gameOver", ({ levelId, reason, campaign, coins, score }) => {
+        addMenuBackground();
+        addTitle("Game Over", reason || "A lab hazard ended the run.");
+
+        add([
+          text(`Level coins: ${coins}\nLevel score: ${score}`, { size: 24, width: 600, align: "center" }),
+          pos(center().x, 240),
+          anchor("center"),
+          color(248, 250, 252),
+        ]);
+
+        addButton("Retry Level", 340, () => go("game", levelId, campaign));
+        addButton("Level Select", 410, () => go("levelSelect"));
+        addButton("Menu", 480, () => go("menu"), { width: 230 });
+      });
+
+      scene("won", (campaign) => {
+        addMenuBackground();
+        addTitle("You Won", "You survived the AP Chem platform lab.");
+
+        add([
+          text(`Final score: ${campaign.totalScore}\nCoins collected: ${campaign.totalCoins}\nLevels cleared: ${campaign.levelsCleared}`, {
+            size: 26,
+            width: 720,
+            align: "center",
+          }),
+          pos(center().x, 235),
+          anchor("center"),
+          color(248, 250, 252),
+        ]);
+
+        addButton("Play Again", 360, () => go("game", 1, makeCampaign()));
+        addButton("High Scores", 430, () => go("scores"));
+        addButton("Menu", 500, () => go("menu"), { width: 230 });
+      });
+
+      go("menu");
+    })();
+  </script>
+</body>
+</html>
