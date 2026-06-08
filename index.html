@@ -99,7 +99,7 @@
       text-align: left;
       cursor: pointer;
     }
-    
+
     .quiz-choice:hover,
     .quiz-choice:focus {
       border-color: #7dd3fc;
@@ -156,6 +156,7 @@
       const quizQuestion = document.getElementById("quizQuestion");
       const quizChoices = document.getElementById("quizChoices");
       const quizFeedback = document.getElementById("quizFeedback");
+      const DEPLOYED_API_BASE = "https://periodical-game.onrender.com";
       
 
       if (!window.kaboom) {
