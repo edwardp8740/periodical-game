@@ -157,7 +157,34 @@
       const quizChoices = document.getElementById("quizChoices");
       const quizFeedback = document.getElementById("quizFeedback");
 
-      
+      function destroySafely(obj) {
+        if (obj && typeof obj.destroy === "function" && obj.exists && obj.exists()) {
+          obj.destroy();
+        }
+      }
+
+      function recolor(obj, r, g, b) {
+        if (!obj) return;
+        try {
+          if (typeof obj.use === "function") {
+            obj.use(color(r, g, b));
+            return;
+          }
+        } catch (error) {
+          // Fall through to direct assignment.
+        }
+        obj.color = rgb(r, g, b);
+      }
+
+      function setScenePaused(isPaused) {
+        try {
+          get("*").forEach((obj) => {
+            obj.paused = isPaused;
+          });
+        } catch (error) {
+          // Some Kaboom builds may not expose object pausing this way.
+        }
+      }
 
       if (!window.kaboom) {
         loading.textContent = "Kaboom did not load. Start the Node server and make sure the browser can reach the Kaboom CDN.";
@@ -169,7 +196,7 @@
       // 2. For GitHub Pages, paste your Render API URL here after deployment.
       //    Example: "https://ap-chem-quest-api.onrender.com"
       // 3. You can also test a hosted page by adding ?api=https://your-service.onrender.com
-      const DEPLOYED_API_BASE = "https://periodical-game.onrender.com";
+      const DEPLOYED_API_BASE = "";
 
       function cleanApiBase(value) {
         return String(value || "").trim().replace(/\/+$/, "");
@@ -493,7 +520,6 @@
             { x: 2600, y: 360, w: 34, h: 34, axis: "y", range: 120, speed: 3.2 },
           ],
           traps: [
-            { type: "slide", x: 1590, y: 260, w: 55, h: 160, targetId: "slide-bridge", dx: 145, message: "Equilibrium shifted the platform." },
             { type: "pop", x: 2280, y: 310, w: 60, h: 160, popX: 2260, popY: 420, popW: 80, popH: 80, message: "The product side bit back." },
           ],
           quizGate: { x: 1260, y: 315, w: 44, h: 185 },
@@ -542,7 +568,6 @@
             { x: 2885, y: 350, w: 36, h: 36, axis: "y", range: 135, speed: 4.0 },
           ],
           traps: [
-            { type: "drop", x: 1090, y: 240, w: 55, h: 190, dropX: 1130, dropY: 25, message: "Fast reaction. Faster hazard." },
             { type: "pop", x: 2520, y: 290, w: 55, h: 180, popX: 2510, popY: 404, popW: 80, popH: 96, message: "Activation energy spike." },
           ],
           quizGate: { x: 1815, y: 265, w: 44, h: 235 },
@@ -660,6 +685,20 @@
         return pool[Math.floor(Math.random() * pool.length)];
       }
 
+      function normalizeQuestion(question, levelId) {
+        if (!question || !Array.isArray(question.choices) || question.choices.length === 0) {
+          return { ...pickFallbackQuestion(levelId), fromApi: false };
+        }
+
+        return {
+          id: String(question.id || `level-${levelId}-q`),
+          levelId: Number(question.levelId || levelId),
+          prompt: String(question.prompt || "Missing question text."),
+          choices: question.choices.map((choice) => String(choice)),
+          fromApi: Boolean(question.fromApi),
+        };
+      }
+
       async function fetchQuestion(levelId) {
         try {
           const response = await fetch(`${API_BASE}/api/questions?level=${levelId}`);
@@ -669,17 +708,17 @@
           }
 
           const question = await response.json();
-          question.fromApi = true;
-          return question;
+          return normalizeQuestion({ ...question, fromApi: true }, levelId);
         } catch (error) {
           const fallback = pickFallbackQuestion(levelId);
-          return { ...fallback, fromApi: false };
+          return normalizeQuestion({ ...fallback, fromApi: false }, levelId);
         }
       }
 
       async function checkAnswer(question, choiceIndex) {
+        const fallback = FALLBACK_QUESTIONS.find((item) => item.id === question.id) || pickFallbackQuestion(question.levelId || 1);
+
         if (!question.fromApi) {
-          const fallback = FALLBACK_QUESTIONS.find((item) => item.id === question.id);
           return {
             correct: fallback.answerIndex === choiceIndex,
             correctIndex: fallback.answerIndex,
@@ -705,7 +744,6 @@
 
           return response.json();
         } catch (error) {
-          const fallback = FALLBACK_QUESTIONS.find((item) => item.id === question.id);
           return {
             correct: fallback.answerIndex === choiceIndex,
             correctIndex: fallback.answerIndex,
@@ -750,24 +788,33 @@
       }
 
       function pauseForQuiz(isPaused) {
-        try {
-          debug.paused = isPaused;
-        } catch (error) {
-          // Some Kaboom builds may not expose debug.pause control.
-        }
+        setScenePaused(isPaused);
       }
 
-      function askChemQuestion(levelId) {
+      async function askChemQuestion(levelId) {
         pauseForQuiz(true);
 
-        return new Promise(async (resolve) => {
-          const question = await fetchQuestion(levelId);
+        const question = await fetchQuestion(levelId);
 
-          quizLabel.textContent = question.fromApi ? "AP Chemistry Gate" : "AP Chemistry Gate - offline questions";
-          quizQuestion.textContent = question.prompt;
-          quizFeedback.textContent = "";
-          quizFeedback.className = "quiz-feedback";
-          quizChoices.innerHTML = "";
+        quizLabel.textContent = question.fromApi ? "AP Chemistry Gate" : "AP Chemistry Gate - offline questions";
+        quizQuestion.textContent = question.prompt;
+        quizFeedback.textContent = "";
+        quizFeedback.className = "quiz-feedback";
+        quizChoices.innerHTML = "";
+
+        return await new Promise((resolve) => {
+          let resolved = false;
+
+          const finish = (value) => {
+            if (resolved) {
+              return;
+            }
+
+            resolved = true;
+            pauseForQuiz(false);
+            quizOverlay.classList.add("hidden");
+            resolve(value);
+          };
 
           question.choices.forEach((choice, index) => {
             const button = document.createElement("button");
@@ -781,17 +828,23 @@
                 item.disabled = true;
               });
 
-              const result = await checkAnswer(question, index);
+              let result;
+              try {
+                result = await checkAnswer(question, index);
+              } catch (error) {
+                result = {
+                  correct: false,
+                  explanation: "The answer check failed.",
+                };
+              }
 
               if (result.correct) {
                 quizFeedback.className = "quiz-feedback correct";
                 quizFeedback.textContent = `Correct. ${result.explanation}`;
 
                 window.setTimeout(() => {
-                  quizOverlay.classList.add("hidden");
-                  pauseForQuiz(false);
-                  resolve({ correct: true, explanation: result.explanation });
-                }, 900);
+                  finish({ correct: true, explanation: result.explanation });
+                }, 700);
 
                 return;
               }
@@ -803,7 +856,7 @@
                 buttons.forEach((item) => {
                   item.disabled = false;
                 });
-              }, 800);
+              }, 650);
             });
 
             quizChoices.appendChild(button);
@@ -974,48 +1027,54 @@
         addButton("Back", 480, () => go("menu"), { width: 230 });
       });
 
-      scene("scores", async () => {
+      scene("scores", () => {
         addMenuBackground();
         addTitle("High Scores", "Scores are stored by the Node API while the server is running.");
 
-        add([
+        const loadingRow = add([
           text("Loading scores...", { size: 22, width: 760, align: "center" }),
           pos(center().x, 230),
           anchor("center"),
           color(226, 232, 240),
-          "scoreLoading",
         ]);
 
-        const rows = await loadScores();
-        destroyAll("scoreLoading");
+        (async () => {
+          const rows = await loadScores();
 
-        if (rows.length === 0) {
-          add([
-            text("No scores yet. Finish a level or campaign to create one.", { size: 22, width: 760, align: "center" }),
-            pos(center().x, 250),
-            anchor("center"),
-            color(226, 232, 240),
-          ]);
-        } else {
-          rows.slice(0, 8).forEach((row, index) => {
+          if (!loadingRow.exists()) {
+            return;
+          }
+
+          destroySafely(loadingRow);
+
+          if (rows.length === 0) {
             add([
-              text(`${index + 1}. ${row.name} - ${row.totalScore} pts - ${row.coins} coins - ${row.levelsCleared} levels`, {
-                size: 20,
-                width: 780,
-                align: "center",
-              }),
-              pos(center().x, 205 + index * 36),
+              text("No scores yet. Finish a level or campaign to create one.", { size: 22, width: 760, align: "center" }),
+              pos(center().x, 250),
               anchor("center"),
-              color(index === 0 ? 250 : 226, index === 0 ? 204 : 232, index === 0 ? 21 : 240),
+              color(226, 232, 240),
             ]);
-          });
-        }
+          } else {
+            rows.slice(0, 8).forEach((row, index) => {
+              add([
+                text(`${index + 1}. ${row.name} - ${row.totalScore} pts - ${row.coins} coins - ${row.levelsCleared} levels`, {
+                  size: 20,
+                  width: 780,
+                  align: "center",
+                }),
+                pos(center().x, 205 + index * 36),
+                anchor("center"),
+                color(index === 0 ? 250 : 226, index === 0 ? 204 : 232, index === 0 ? 21 : 240),
+              ]);
+            });
+          }
+        })();
 
         addButton("Back", 480, () => go("menu"), { width: 230 });
       });
 
       function makeToast(message) {
-        const toast = add([
+        const toastBg = add([
           rect(760, 44),
           pos(center().x, 76),
           anchor("center"),
@@ -1023,28 +1082,37 @@
           color(15, 23, 42),
           outline(2, rgb(125, 211, 252)),
           z(200),
-          "toast",
         ]);
 
-        add([
+        const toastText = add([
           text(message, { size: 18, width: 730, align: "center" }),
           pos(center().x, 76),
           anchor("center"),
           fixed(),
           color(248, 250, 252),
           z(201),
-          "toast",
         ]);
 
         wait(2.2, () => {
-          destroyAll("toast");
+          destroySafely(toastText);
+          destroySafely(toastBg);
         });
 
-        return toast;
+        return toastBg;
       }
 
       function makePlatform(data, level, registry) {
         const platformColor = data.type === "fake" ? [99, 102, 241] : [30, 64, 91];
+        const tags = ["platform"];
+
+        if (data.type === "falling") {
+          tags.push("fallingPlatform");
+        }
+
+        if (data.type === "fake") {
+          tags.push("fakePlatform");
+        }
+
         const platform = add([
           rect(data.w, data.h),
           pos(data.x, data.y),
@@ -1052,11 +1120,13 @@
           body({ isStatic: true }),
           color(...platformColor),
           outline(2, rgb(...level.accent)),
-          "platform",
+          ...tags,
           {
             id: data.id || "",
             type: data.type || "normal",
             falling: false,
+            collapsing: false,
+            collapseQueued: false,
             sliding: false,
             targetX: data.x,
           },
@@ -1064,14 +1134,6 @@
 
         if (data.id) {
           registry[data.id] = platform;
-        }
-
-        if (data.type === "falling") {
-          platform.tag("fallingPlatform");
-        }
-
-        if (data.type === "fake") {
-          platform.tag("fakePlatform");
         }
 
         platform.onUpdate(() => {
@@ -1090,7 +1152,7 @@
           }
 
           if (platform.pos.y > 760) {
-            destroy(platform);
+            destroySafely(platform);
           }
         });
 
@@ -1242,7 +1304,7 @@
       }
 
       function addObjective(level) {
-        add([
+        const objective = add([
           sprite(level.objectiveSprite),
           pos(level.objective.x, level.objective.y),
           anchor("center"),
@@ -1251,13 +1313,15 @@
           "objective",
         ]);
 
-        add([
+        const label = add([
           text(level.objectiveText, { size: 15, width: 150, align: "center" }),
           pos(level.objective.x, level.objective.y - 52),
           anchor("center"),
           color(248, 250, 252),
-          "objectiveLabel",
         ]);
+
+        objective.label = label;
+        return objective;
       }
 
       function addExit(level) {
@@ -1289,15 +1353,15 @@
           "quizGate",
         ]);
 
-        add([
+        const label = add([
           text("AP\nCHEM\nGATE", { size: 14, width: 70, align: "center" }),
           pos(level.quizGate.x + level.quizGate.w / 2, level.quizGate.y + level.quizGate.h / 2),
           anchor("center"),
           color(239, 246, 255),
           z(3),
-          "quizGateLabel",
         ]);
 
+        gate.label = label;
         return gate;
       }
 
@@ -1397,6 +1461,12 @@
         }
 
         function completeLevel() {
+          if (state.finished || state.dead) {
+            return;
+          }
+
+          state.finished = true;
+
           const timeBonus = Math.max(0, 120 - Math.floor(time() - state.startTime)) * 5;
           const levelBonus = 500 + timeBonus + state.levelScore;
           campaign.totalScore += levelBonus;
@@ -1467,8 +1537,10 @@
         });
 
         player.onCollide("objective", (objective) => {
-          destroy(objective);
-          destroyAll("objectiveLabel");
+          if (objective.label) {
+            destroySafely(objective.label);
+          }
+          destroySafely(objective);
           state.hasObjective = true;
           state.levelScore += 350;
           makeToast(`${level.objectiveText} collected.`);
@@ -1482,18 +1554,38 @@
         });
 
         player.onCollide("fallingPlatform", (platform) => {
-          if (!platform.falling) {
-            platform.falling = true;
-            makeToast("This platform is dissolving.");
+          if (platform.collapseQueued) {
+            return;
           }
+
+          platform.collapseQueued = true;
+          makeToast("This platform is dissolving.");
+
+          wait(1.0, () => {
+            if (!platform.exists()) {
+              return;
+            }
+
+            platform.falling = true;
+          });
         });
 
         player.onCollide("fakePlatform", (platform) => {
-          if (!platform.falling) {
-            platform.falling = true;
-            platform.color = rgb(190, 18, 60);
-            makeToast("That platform was not on the lab safety contract.");
+          if (platform.collapseQueued) {
+            return;
           }
+
+          platform.collapseQueued = true;
+          makeToast("That platform was not on the lab safety contract.");
+
+          wait(1.0, () => {
+            if (!platform.exists()) {
+              return;
+            }
+
+            recolor(platform, 190, 18, 60);
+            platform.falling = true;
+          });
         });
 
         player.onCollide("trap", (trap) => {
@@ -1523,21 +1615,27 @@
         });
 
         player.onCollide("quizGate", async () => {
-          if (state.quizAnswered || state.quizOpen) {
+          if (state.quizAnswered || state.quizOpen || state.finished) {
             return;
           }
 
           state.quizOpen = true;
-          const result = await askChemQuestion(level.id);
-          state.quizOpen = false;
 
-          if (result.correct) {
-            state.quizAnswered = true;
-            state.levelScore += 250;
-            destroy(quizGate);
-            destroyAll("quizGateLabel");
-            makeToast("Gate unlocked. Chemistry handled.");
-            updateHud();
+          try {
+            const result = await askChemQuestion(level.id);
+
+            if (result.correct) {
+              state.quizAnswered = true;
+              state.levelScore += 250;
+              if (quizGate.label) {
+                destroySafely(quizGate.label);
+              }
+              destroySafely(quizGate);
+              makeToast("Gate unlocked. Chemistry handled.");
+              updateHud();
+            }
+          } finally {
+            state.quizOpen = false;
           }
         });
 
@@ -1555,6 +1653,33 @@
           }
 
           completeLevel();
+        });
+
+        onKeyPress("k", async () => {
+          if (state.quizOpen || state.finished) {
+            return;
+          }
+
+          state.quizOpen = true;
+
+          try {
+            const result = await askChemQuestion(level.id);
+
+            if (result && result.correct) {
+              state.quizAnswered = true;
+              state.hasObjective = true;
+              if (quizGate.label) {
+                destroySafely(quizGate.label);
+              }
+              destroySafely(quizGate);
+              makeToast("Quiz cleared. Skipping this level.");
+              completeLevel();
+            } else {
+              makeToast("Question answered incorrectly.");
+            }
+          } finally {
+            state.quizOpen = false;
+          }
         });
 
         onKeyPress("escape", () => {
